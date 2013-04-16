@@ -1,18 +1,23 @@
 package sk.fiit.martinfranta.disambiguation.module.dblp;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 
 import org.apache.log4j.Logger;
-import org.openrdf.query.BindingSet;
 
-import sk.fiit.martinfranta.disambiguation.module.ContextAttribute;
+import sk.fiit.martinfranta.disambiguation.module.Candidate;
 import sk.fiit.martinfranta.disambiguation.module.Entity;
-import sk.fiit.martinfranta.disambiguation.module.IEntity;
+import sk.fiit.martinfranta.tools.learning.Record;
 
-public class AuthorEntity extends Entity implements IEntity  {
-	private static Logger logger = Logger.getLogger("AuthorEntity");
+public class AuthorEntity extends Entity  {
+	private static final long serialVersionUID = 5811095425481971007L;
 	
+	@SuppressWarnings("unused")
+	private static Logger logger = Logger.getLogger("AuthorEntity");
+	private HashMap<String, LinkedList<Candidate>> personsMap;
+
 	
 	public AuthorEntity() {
 		super(null);
@@ -30,16 +35,13 @@ public class AuthorEntity extends Entity implements IEntity  {
 		return (DblpContext)context;
 	}
 
-	@Override
-	public void setBindingSet(BindingSet bindingSet) {
-		this.identifier = bindingSet.getValue("s").stringValue();
-		fields.put("resource", "<"+identifier+">");
-	}
+	
 	
 	@Override
-	public String getCandidatesSparql(String... params) {
+	public String getCandidatesQuery(String... params) {
 		String regex = prepareRegex(identifier);
 		
+		/** TODO: from config files */
 		StringBuilder queryString = new StringBuilder();
 		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
 		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
@@ -55,34 +57,11 @@ public class AuthorEntity extends Entity implements IEntity  {
 	@Override
 	public void setIdentifier(String identifier) {
 		super.setIdentifier(identifier);
-		
-	}
-
-	@Override
-	public void setCandidates(List<IEntity> candidates) {
-		super.setCandidates(candidates);
-	}
-
-	@SuppressWarnings("unchecked")
-	@Override
-	public void setContextBindingSet(ContextAttribute<?> attr, BindingSet bindingSet) {
-		if ("coauthors".contentEquals(attr.getIdentifier())) {
-			((ArrayList<AuthorEntity>) this.getContext().getAttribute("coauthors")).add(new AuthorEntity(bindingSet.getValue("coname").stringValue()));
-			logger.info("Coauthor: "+bindingSet.getValue("coname").stringValue());
-		}
-		else if ("publications".contentEquals(attr.getIdentifier())) {
-			((ArrayList<String>) this.getContext().getAttribute("publications")).add(new String(bindingSet.getValue("p").stringValue()));
-			logger.info("publication: "+bindingSet.getValue("p").stringValue());
-		}
-		else if ("workplace".contentEquals(attr.getIdentifier())) {
-			this.getContext().setAttribute("workplace", bindingSet.getValue("p").stringValue());
-			logger.info("workplace: "+bindingSet.getValue("p").stringValue());
-		}
 	}
 	
 	// PRIVATE METHODS ************************   //
 	
-	private String prepareRegex (String namedEntity) {
+	private String prepareRegex(String namedEntity) {
 		String[] words = namedEntity.split("\\s");
 		
 		String firstLetters = String.valueOf(words[0].charAt(0));
@@ -91,8 +70,35 @@ public class AuthorEntity extends Entity implements IEntity  {
 		}
 		String lastWord = words[words.length - 1];
 		
-		return firstLetters+"([a-z ]*) "+lastWord;
+		return firstLetters+"([a-z ]*) "+lastWord+".?.?$";
+	}
+	
+	@SuppressWarnings("unchecked")
+	protected void buildPersonsMap() {
+		personsMap = new HashMap<String, LinkedList<Candidate>>();
+		for (Candidate candidate : (List<Candidate>)this.getCandidates()) {
+			for (AuthorEntity person : (ArrayList<AuthorEntity>)candidate.getContext().getAttribute("coauthors")) {
+				LinkedList<Candidate> list = personsMap.get(person.getField("resource"));
+				if (list == null) {
+					list = new LinkedList<Candidate>();
+				}
+				list.add((Candidate)candidate);
+			}
+		}
+		for (Candidate candidate : (List<Candidate>)this.getCandidates()) {
+			for (AuthorEntity person : (ArrayList<AuthorEntity>)candidate.getContext().getAttribute("collegues")) {
+				LinkedList<Candidate> list = personsMap.get(person.getField("resource"));
+				if (list == null) {
+					list = new LinkedList<Candidate>();
+				}
+				list.add((Candidate)candidate);
+			}
+		}
 	}
 
+	public HashMap<String, LinkedList<Candidate>> getPersonsMap() {
+		return personsMap;
+	}
+	
 	
 }

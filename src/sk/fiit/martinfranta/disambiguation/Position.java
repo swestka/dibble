@@ -1,10 +1,23 @@
 package sk.fiit.martinfranta.disambiguation;
 
-public class Position {
+import java.io.Serializable;
+
+public class Position implements Serializable{
 	
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -3280536323941300874L;
 	protected int start;
+	protected int end;
 	protected int length;
 	protected String document;
+	
+	public Position (int start, int end) {
+		this.start = start;
+		this.end = end;
+		this.length = end - start;
+	}
 	
 	public int getStart() {
 		return start;
@@ -28,5 +41,14 @@ public class Position {
 	
 	public void setDocument(String document) {
 		this.document = document;
+	}
+
+	public int getEnd() {
+		return end;
+	}
+
+	public void setEnd(int endIndex) {
+		this.end = endIndex;
+		
 	}
 }

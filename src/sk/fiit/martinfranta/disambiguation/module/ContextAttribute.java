@@ -1,8 +1,12 @@
 package sk.fiit.martinfranta.disambiguation.module;
 
-public class ContextAttribute<T> {
+import java.io.Serializable;
+
+public class ContextAttribute<T> implements Serializable {
+
+	private static final long serialVersionUID = -7279219176318548028L;
 	private T  attribute;
-	private String sparql;
+	private String query;
 	private String identifier;
 	
 	public ContextAttribute(T t, String identifier) {
@@ -26,11 +30,11 @@ public class ContextAttribute<T> {
 		this.attribute = attribute;
 	}
 
-	public String getSparql() {
-		return sparql;
+	public String getQuery() {
+		return query;
 	}
 
-	public void setSparql(String sparql) {
-		this.sparql = sparql;
+	public void setQuery(String query) {
+		this.query = query;
 	}
 }

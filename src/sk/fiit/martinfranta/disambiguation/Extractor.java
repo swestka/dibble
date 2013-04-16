@@ -22,12 +22,21 @@ public class Extractor {
 	
 	private FileInputStream inputStream;
 	private PDDocument doc;
-	private String text = "";
+	private static String text = "";
 	
 	private List<String> types = new ArrayList<String>();
 	
-	private ArrayList<Annotation> mentions = new ArrayList<Annotation>();
+	private static ArrayList<Annotation> mentions = new ArrayList<Annotation>();
 	
+	
+	public static ArrayList<Annotation> getMentions() {
+		return mentions;
+	}
+
+	public static void setMentions(ArrayList<Annotation> mentions1) {
+		mentions = mentions1;
+	}
+
 	public Extractor (FileInputStream in) {
 		this.inputStream = in;
 		try {
@@ -51,7 +60,7 @@ public class Extractor {
 				BufferedReader in = new BufferedReader(new FileReader(f));
 				String line = "";
 				while ((line = in.readLine()) != null) {
-					this.text+=line;
+					text+=line;
 				}
 				
 				in.close();
@@ -73,6 +82,7 @@ public class Extractor {
 	}
 	
 	public ArrayList<Annotation> extract () {
+		text = text.replaceAll("-(\\s*)\\n(.+)", "$2");
 		return extract(text);
 	}
 	
@@ -91,12 +101,12 @@ public class Extractor {
 		}
 	}
 	
-	public String getText () {
+	public static String getText () {
 		return text;
 	}
 
-	public void setText (String text) {
-		this.text = text;
+	public void setText (String text1) {
+		text = text1;
 	}
 	
 	public Extractor addType(String type) {

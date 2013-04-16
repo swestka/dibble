@@ -38,5 +38,7 @@
 	<classpathentry kind="lib" path="/ntfs/prog/workspace/Disambiguation/lib/slf4j-log4j12-1.6.1.jar"/>
 	<classpathentry kind="lib" path="/ntfs/prog/workspace/Disambiguation/lib/log4j-1.2.15.jar"/>
 	<classpathentry kind="con" path="org.eclipse.jdt.junit.JUNIT_CONTAINER/4"/>
+	<classpathentry kind="lib" path="/ntfs/prog/workspace/Disambiguation/lib/flexjson-2.1.jar"/>
+	<classpathentry kind="lib" path="/ntfs/prog/workspace/Disambiguation/lib/simmetrics_jar_v1_6_2_d07_02_07.jar"/>
 	<classpathentry kind="output" path="bin"/>
 </classpath>

@@ -1,240 +1,218 @@
 package sk.fiit.martinfranta.disambiguation;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 import org.apache.log4j.Logger;
 import org.apache.uima.jcas.tcas.Annotation;
-import org.openrdf.OpenRDFException;
-import org.openrdf.query.BindingSet;
-import org.openrdf.query.MalformedQueryException;
-import org.openrdf.query.QueryEvaluationException;
-import org.openrdf.query.TupleQueryResult;
-import org.openrdf.repository.RepositoryException;
 
+import sk.fiit.martinfranta.disambiguation.module.Candidate;
 import sk.fiit.martinfranta.disambiguation.module.ContextAttribute;
 import sk.fiit.martinfranta.disambiguation.module.Entity;
-import sk.fiit.martinfranta.disambiguation.module.Factory;
-import sk.fiit.martinfranta.disambiguation.module.IEntity;
-import sk.fiit.martinfranta.rdftools.SparqlExecutor;
+import sk.fiit.martinfranta.tools.DataIterator;
+import sk.fiit.martinfranta.tools.DataSet;
+import sk.fiit.martinfranta.tools.Factory;
+import sk.fiit.martinfranta.tools.KnowledgeBaseException;
+import sk.fiit.martinfranta.tools.ScoreValueComparator;
+import sk.fiit.martinfranta.tools.Serializer;
+import sk.fiit.martinfranta.tools.Similarity;
+import sk.fiit.martinfranta.tools.learning.PairwiseClassifier;
+import sk.fiit.martinfranta.tools.learning.Record;
 
 public class Disambiguator {
 	
 	private static ArrayList<Annotation> mentions;
-	private static Logger logger = Logger.getLogger(Disambiguator.class);
+	private ArrayList<Entity> resolved = new ArrayList<Entity>();
+	private ArrayList<Entity> unresolved = new ArrayList<Entity>();
 	
-	public static void disambiguate (ArrayList<Annotation> foundMentions) {
+	private static Logger logger = Logger.getLogger(Disambiguator.class);
+	private KnowledgeBase knowledgeBase;
+	
+	public Disambiguator () {
+		knowledgeBase = KnowledgeBase.getInstance();
+	}
+	
+	public void disambiguate (ArrayList<Annotation> foundMentions) {
 		mentions = foundMentions;
+		LinkedList<Entity> entities;
+		entities = (LinkedList<Entity>)Serializer.deserialize();
 		
-		logger.info("Iterating entities");
-		
-		for (Annotation a : mentions) {
-			if (a.getType().toString().equals(Extractor.PERSON)) {
-				logger.info(a.getCoveredText()+": ");
-				
-				IEntity entity = Factory.createEntity();
-				entity.setIdentifier(a.getCoveredText());
-				entity.setCandidate(false);
-				entity.setField("name", a.getCoveredText());
-				
-				fillCandidates(entity);
-				
-				int candidatesSize = entity.getCandidates().size();
-				if (candidatesSize == 0) {
-					logger.info("Nothing found");
-				}
-				
-				else if (candidatesSize == 1) {
-					logger.info(entity.getCandidates().get(0));
-				}
-				
-				else if (candidatesSize < 5) {
-					logger.info("There are more candidates! " + candidatesSize);
-					for (IEntity t : entity.getCandidates()) {
-						logger.info("candidate: "+t.getIdentifier());
-						setEntityContext(t);
+		if (entities == null || entities.size() == 0) {
+			entities = new LinkedList<Entity>();
+			for (Annotation a : mentions) {
+				if (a.getType().toString().equals(Extractor.PERSON)) {
+					logger.info(a.getCoveredText()+": ");
+					
+					Entity entity = Factory.createEntity(a.getCoveredText());
+					entity.setIdentifier(a.getCoveredText());
+					entity.setField("name", a.getCoveredText());
+					entity.setPosition(a.getBegin(), a.getEnd());
+					
+					fillCandidates(entity);
+					
+					logger.info("Found: "+entity.getCandidates().size());
+					
+					//TODO: 1 found - OK, next
+					if (entity.getCandidates().size() == 1) {
+						entity.setLinkedEntity(entity.getCandidates().get(0));
+						resolved.add(entity);
+					}
+					
+					if (entity.getCandidates().size() < 5) {
+						
+						for (Candidate t : entity.getCandidates()) {
+							setEntityContext(t);
+						}
+					}
+					//TODO: check duplicates
+					if (entity.getCandidates().size() > 4) {
+						for (Candidate t : entity.getCandidates()) {
+							if (Similarity.isSimilar(entity.getField("name"), t.getField("name"), .9f)) {
+								logger.info(entity.getField("name")+" "+t.getField("name")+" are similar");
+								setEntityContext(t);
+							}
+						}
+					}
+					
+					if (entity.getCandidates().size() > 0) {
+						entity.setCandidatesScore(1.0/entity.getCandidates().size());
+						logger.info("Score: "+1.0/entity.getCandidates().size());
+						entities.add(entity);
 					}
 				}
-				else {
-					logger.info("Too many candidates "+candidatesSize);
+			}
+			
+			Serializer.stdSerialize(entities);
+		}
+		
+		scoreSet(entities);
+	}
+	
+	public void classify() {
+		for (Entity entity : unresolved) {
+			Record r1 = PairwiseClassifier.buildRecord(entity);
+			for (Candidate c : entity.getCandidates()) {
+				
+				Record r2 = PairwiseClassifier.buildRecord(c);
+				if (PairwiseClassifier.classify(r1, r2)) {
+					logger.info(c.getField("resource")+" - "+entity.getIdentifier());
 				}
 			}
 		}
 	}
 	
-	public static void fillCandidates(IEntity entity) {
-		SparqlExecutor exec = SparqlExecutor.create();
-		
-		try {
+	private void scoreSet(LinkedList<Entity> entities) {
+		for (Entity entity : entities) {
+			logger.info("Candidates for: "+entity.getField("name"));
+			if (entity.getCandidates().size() == 1 || entity.getLinkedEntity()!=null) continue;
+			Map<Candidate, Double> scores = new HashMap<Candidate, Double>();
+			
+			for (Candidate candidate : entity.getCandidates()) {
+				proximity(entity, candidate);
+				cooccurence(entity, candidate);
+				popular(entity, candidate);
+				relationships(entity, candidate);
+				similarity(entity, candidate);
+				
+				scores.put(candidate, candidate.getConfidenceScore());
+				logger.info(candidate.getField("resource")+" cf:"+candidate.getConfidenceScore());
+			}
+			
+			ScoreValueComparator svc = new ScoreValueComparator(scores);
+			TreeMap<Candidate, Double> candidateScores = new TreeMap<Candidate, Double>(svc);
+			candidateScores.putAll(scores);
+			
+			Candidate first = candidateScores.firstEntry().getKey();
+			candidateScores.remove(first);
+			Candidate second = candidateScores.firstEntry().getKey();
+			
+			if (first.getConfidenceScore() < second.getConfidenceScore()*1.2) {
+				resolved.add(entity);
+				entity.setLinkedEntity(first);
+				logger.info("best fit: "+first.getField("resource"));
+			}
+			else {
+				unresolved.add(entity);
+				logger.info("unresolved");
+			}
+		}
+	}
+	
+	private void relationships(Entity entity, Candidate candidate) {
+		candidate.relationships(entity);
+	}
 
-			TupleQueryResult result = exec.query(entity.getCandidatesSparql());
+	private void popular(Entity entity, Candidate candidate) {
+		candidate.addConfidenceScore(candidate.popularity()/100);
+	}
+
+	private void cooccurence(Entity entity, Candidate candidate) {
+		String text = Extractor.getText();
+		candidate.addConfidenceScore(candidate.cooccurence(text)/100.0);
+	}
+
+	private void proximity(Entity entity, Candidate candidate) {
+		String text = Extractor.getText();
+		int start = entity.getStartIndex() < 400 ? 0 : entity.getStartIndex() - 400;
+		int end = text.length() < start + 400 ? text.length() : start + 400;
+		String window = text.substring(start, end);
+		
+		for (int distance : candidate.proximity(window, entity.getStartIndex() - start)) {
+			candidate.addConfidenceScore((10.0/distance));
+		}
+	}
+	
+	private void similarity(Entity entity, Candidate candidate) {
+		double addition = Similarity.isSimilar(entity.getField("name"), candidate.getField("name"), 90f) ? 0.5 : 0;
+		candidate.addConfidenceScore(addition);
+	}
+
+	public void fillCandidates(Entity entity) {
+		logger.info("Position:"+entity.getStartIndex());
+		DataIterator<?> result = knowledgeBase.getData(entity.getCandidatesQuery());
+		while (knowledgeBase.hasNext(result)) {
+			DataSet<?> resultSet = knowledgeBase.next(result);
+			Candidate candidate = Factory.createCandidate("Unresolved candidate of "+entity.getIdentifier());
+			candidate.setCandidateResultSet(resultSet);
+			entity.addCandidate(candidate);
+			candidate.getContext().assignAttributes();
+			logger.info(candidate.getConfidenceScore());
+		}
+		try {
+			knowledgeBase.closeResult(result);
+		} catch (KnowledgeBaseException e) {
+			e.printStackTrace();
+		}
+	}
+	
+	private void setEntityContext(Entity entity) {
+		
+		for (ContextAttribute<?> attr : entity.getContext().getContextAttributes().values()) {
+			logger.info(attr.getIdentifier());
+			DataIterator<?> result = (DataIterator<?>)knowledgeBase.getData(attr.getQuery()); 
+			
+			while (knowledgeBase.hasNext(result)) {
+				DataSet<?> resultSet = knowledgeBase.next(result);
+				entity.getContext().setContextResultSet(attr, resultSet);
+			}
 			
 			try {
-				while (result.hasNext()) {
-					BindingSet bindingSet = result.next();
-					IEntity candidate = Factory.createEntity();
-					candidate.setCandidate(true);
-					candidate.setBindingSet(bindingSet);
-					entity.addCandidate(candidate);
-				}
+				knowledgeBase.closeResult(result);
+			} catch (KnowledgeBaseException e) {
+				e.printStackTrace();
 			}
-			finally {
-				result.close();
-			}
-		   
-		}
-		catch (OpenRDFException e) {
-		   logger.error(e.getStackTrace());
 		}
 	}
 	
-	private static void setEntityContext(IEntity entity) {
-		SparqlExecutor exec = SparqlExecutor.create();
-		
-		try {
-			for (ContextAttribute<?> attr : entity.getContext().getContextAttributes().values()) {
-				logger.info(attr.getIdentifier());
-				TupleQueryResult result = exec.query(attr.getSparql()); 
-				
-				while (result.hasNext()) {
-					BindingSet bindingSet = result.next();
-					entity.setContextBindingSet(attr, bindingSet);
-				}
-				
-				result.close();
-			}
-			
-		} catch (RepositoryException e) {
-			e.printStackTrace();
-		} catch (MalformedQueryException e) {
-			e.printStackTrace();
-		} catch (QueryEvaluationException e) {
-			e.printStackTrace();
-		}
+	public List<Entity> getResolved() {
+		return resolved;
 	}
 	
-	
-	
-	public static void sparql () {
-		SparqlExecutor exec = SparqlExecutor.create();
-			
-//		StringBuilder queryString = new StringBuilder();
-//		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-//		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-//		queryString.append("SELECT ?s ?n WHERE {\n");
-//		queryString.append("?s foaf:homepage ?o.\n");
-//		queryString.append("?s foaf:name ?n.\n");
-//		queryString.append("FILTER regex(?n, \"Bielik*\", \"i\").\n");
-//		queryString.append("}"); 
-//		queryString.append("LIMIT 100");
-
-//		StringBuilder queryString = new StringBuilder();
-//		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-//		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-//		queryString.append("SELECT ?s WHERE {\n");
-//		queryString.append("?s a <http://lsdis.cs.uga.edu/projects/semdis/opus#Article>.\n");
-//		queryString.append("?p opus:Author ?o.");
-//		queryString.append("FILTER regex(?s, \"Entity\", \"s\").");
-//		queryString.append("} LIMIT 100");
-//			
-		
-//		StringBuilder queryString = new StringBuilder();
-//		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-//		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-//		queryString.append("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n");
-//		queryString.append("SELECT ?o ?s WHERE {\n");
-//		queryString.append("?s a opus:Book.\n");
-//		queryString.append("?s opus:author ?x.\n");
-//		queryString.append("?x ?p ?y.\n");
-//		queryString.append("?y a foaf:Person.\n");
-//		queryString.append("?s rdfs:label ?o.\n");
-//		queryString.append("FILTER regex(?o, \"semantic(.*)\", \"s\").\n");
-//		queryString.append("} ");
-//		queryString.append("LIMIT 100");
-		
-//		StringBuilder queryString = new StringBuilder();
-//		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-//		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-//		queryString.append("SELECT ?name ?coname WHERE {\n");
-//		queryString.append("<http://www.informatik.uni-trier.de/~ley/db/indices/a-tree/b/Bielikov=aacute=:M=aacute=ria.html> foaf:name ?name. \n");		
-////		queryString.append("FILTER regex(?name, \"Bielik\", \"i\").\n");		
-//		queryString.append("?art rdf:type opus:Article.\n");
-//		queryString.append("?art opus:author [?collection <http://www.informatik.uni-trier.de/~ley/db/indices/a-tree/b/Bielikov=aacute=:M=aacute=ria.html>].\n");
-//		queryString.append("?art opus:author [?members ?coauthor].\n");
-//		queryString.append("?coauthor foaf:name ?coname.\n");
-//		queryString.append("FILTER (?name != ?coname). \n");
-//
-//		queryString.append("} LIMIT 100");			
-				
-		
-//		StringBuilder queryString = new StringBuilder();
-//		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-//		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-//		queryString.append("SELECT ?s ?o WHERE {\n");
-//		queryString.append("OPTIONAL {<http://www.informatik.uni-trier.de/~ley/db/indices/a-tree/a/Amann:Bernhard.html> foaf:homepage ?s}.\n");
-//		queryString.append("<http://www.informatik.uni-trier.de/~ley/db/indices/a-tree/a/Amann:Bernhard.html> foaf:name ?o.\n");
-//		queryString.append("}");
-		
-//		StringBuilder queryString = new StringBuilder();
-//		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-//		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-//		queryString.append("SELECT ?p ?x WHERE {\n");
-//		queryString.append("?auth a foaf:Person. \n");
-//		queryString.append("?auth foaf:workplaceHomepage ?p; foaf:name ?x. \n");
-//		queryString.append("} LIMIT 1000");
-
-		StringBuilder queryString = new StringBuilder();
-		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-		queryString.append("SELECT ?t ?p WHERE {\n");
-		
-//		queryString.append("?art a opus:Article.\n");
-//		queryString.append("OPTIONAL{?art a opus:Article_in_proceedings}.\n");
-//		queryString.append("OPTIONAL{?art a opus:Book}.\n");
-//		queryString.append("OPTIONAL{?art a opus:Publication}.\n");
-		queryString.append("?art a $t.\n");
-		queryString.append("?art opus:author [?collection <http://www.informatik.uni-trier.de/~ley/db/indices/a-tree/b/Bielikov=aacute=:M=aacute=ria.html>].\n");
-		
-		queryString.append("?art rdfs:label  ?p. \n");
-		queryString.append(" }");
-
-//		StringBuilder queryString = new StringBuilder();
-//		queryString.append("PREFIX opus: <http://lsdis.cs.uga.edu/projects/semdis/opus#>\n");
-//		queryString.append("PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n");
-//		queryString.append("SELECT ?p WHERE {\n");
-//		queryString.append("?art rdf:type opus:Article.\n");
-//
-//		queryString.append("?art ?p ?x. \n");
-//		queryString.append("LIMIT 15");
-//		
-//		queryString.append("}");
-//		
-		TupleQueryResult result;
-		try {
-			result = exec.query(queryString);
-			
-			while (result.hasNext()) {
-				BindingSet bindingSet = result.next();
-				System.out.println(
-						bindingSet.getValue("t").stringValue()+" "+ 
-						bindingSet.getValue("p").stringValue()
-				);
-			}
-			result.close();
-			
-		} catch (RepositoryException e) {
-			e.printStackTrace();
-		} catch (MalformedQueryException e) {
-			e.printStackTrace();
-		} catch (QueryEvaluationException e) {
-			e.printStackTrace();
-		}
-			
-			
+	public List<Entity> getUnresolved() {
+		return unresolved;
 	}
-	
-	public void proximity(Entity candidate) {
-		
-	}
-	
-	
 }

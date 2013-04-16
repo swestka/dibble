@@ -4,28 +4,31 @@ import java.util.ArrayList;
 
 import org.apache.uima.jcas.tcas.Annotation;
 
-import sk.fiit.martinfranta.rdftools.SparqlExecutor;
+import sk.fiit.martinfranta.tools.learning.PairwiseClassifier;
 
 public class Main {
 
-	/**
-	 * @param args
-	 * @throws IllegalAccessException 
-	 * @throws InstantiationException 
-	 */
-	public static void main(String[] args) throws InstantiationException, IllegalAccessException {
+	static {
 		org.apache.log4j.PropertyConfigurator.configure("log4j.properties");
+	}
+	
+	public static void main(String[] args) {
+		KnowledgeBase kb = KnowledgeBase.getInstance();
+		kb.initialize();
 		
-		SparqlExecutor.repositoryId = args[1];
-//		Disambiguator.sparql();
 		Extractor e = new Extractor(args[0]);
-		e.addType(Extractor.PERSON)
+		e
+			.addType(Extractor.PERSON)
 //			.addType(Extractor.ORGANIZATION)  
 //			.addType(Extractor.LOCATION)
 		;
-
+		
 		ArrayList<Annotation> entityMentions = e.extract();
-		Disambiguator.disambiguate(entityMentions);
+		Disambiguator dis = new Disambiguator();
+		dis.disambiguate(entityMentions);
+		
+		PairwiseClassifier.learnTrue(dis.getResolved());
+		//dis.classify();
 	}
 
 }
